@@ -1,0 +1,1 @@
+# CLI Layer - QProcess-based command execution

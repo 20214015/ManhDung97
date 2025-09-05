@@ -26,6 +26,10 @@ if hasattr(sys, '_MEIPASS'):
 
 try:
     from optimizations.app_config import AppConstants, app_config
+    from optimizations.adaptive_config import apply_adaptive_optimizations
+    from optimizations.enhanced_performance_monitor import get_enhanced_performance_monitor
+    from optimizations.smart_resource_manager import get_smart_resource_manager
+    from optimizations.optimization_integration import initialize_optimizations, cleanup_optimizations
     from error_handler import global_error_handler, setup_global_exception_handler
     from optimizations.worker_manager import get_global_worker_manager
     from optimizations.performance_monitor import global_performance_monitor
@@ -127,7 +131,17 @@ if __name__ == "__main__":
     print("✅ Applying theme...")
     AppTheme.apply_theme(app, settings)
     
+    # Apply adaptive optimizations
+    print("🎯 Applying adaptive optimizations...")
+    optimization_stats = apply_adaptive_optimizations()
+    print(f"🎯 Optimized for {optimization_stats['system_profile']['performance_tier']} performance tier")
+    print(f"🎯 System: {optimization_stats['system_profile']['cpu_cores']} cores, {optimization_stats['system_profile']['memory_gb']:.1f}GB RAM")
+    
     try:
+        # Initialize enhanced monitoring systems
+        enhanced_monitor = get_enhanced_performance_monitor()
+        resource_manager = get_smart_resource_manager()
+        
         # Initialize worker manager
         worker_manager = None
         
@@ -136,14 +150,29 @@ if __name__ == "__main__":
         window = MainWindow()
         print("✅ MainWindow created successfully")
         
+        # Initialize integrated optimization systems
+        print("🚀 Initializing integrated optimization systems...")
+        optimization_success = initialize_optimizations(window)
+        if optimization_success:
+            print("✅ Integrated optimization systems initialized")
+        else:
+            print("⚠️ Some optimization systems failed to initialize")
+        
         # Set up error handler parent for dialogs
         global_error_handler.set_parent_widget(window)
         
-        # Start performance monitoring if enabled
+        # Start enhanced monitoring systems
+        print("🎯 Starting enhanced performance monitoring...")
+        enhanced_monitor.start_monitoring()
+        
+        print("🧠 Starting smart resource management...")
+        resource_manager.start_management()
+        
+        # Start legacy performance monitoring if enabled
         if app_config.get("performance.monitoring_enabled", True):
             global_performance_monitor.start_monitoring()
         
-        global_error_handler.log_info(f"{AppConstants.APP_NAME} {AppConstants.APP_VERSION} started", "Application")
+        global_error_handler.log_info(f"{AppConstants.APP_NAME} {AppConstants.APP_VERSION} started with adaptive optimizations", "Application")
         
         # Show window and run app
         print("🖥️ Showing MainWindow...")
@@ -170,6 +199,14 @@ if __name__ == "__main__":
             
             # Save configuration
             app_config.save_to_qsettings(settings)
+            
+            # Stop enhanced monitoring systems
+            try:
+                enhanced_monitor.stop_monitoring()
+                resource_manager.stop_management()
+                cleanup_optimizations()
+            except:
+                pass
             
             # Cleanup workers
             try:

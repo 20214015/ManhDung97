@@ -1,0 +1,10 @@
+{
+  "from_instance": 1,
+  "to_instance": 500,
+  "batch_size": 20,
+  "batch_delay": 15,
+  "start_delay": 4,
+  "disable_ai_optimization": true,
+  "enable_auto_start": false,
+  "auto_start_time": "04:38"
+}

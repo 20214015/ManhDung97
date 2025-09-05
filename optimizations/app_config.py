@@ -17,12 +17,18 @@ class AppConstants:
     # Performance Settings
     class Performance:
         DEFAULT_COMMAND_TIMEOUT = 30
-        UI_REFRESH_INTERVAL = 100
-        AUTO_REFRESH_INTERVAL = 30
-        WORKER_CHECK_INTERVAL = 50
-        TABLE_UPDATE_BATCH_SIZE = 50
-        CACHE_TTL_SECONDS = 30
-        MAX_CONCURRENT_WORKERS = 4
+        UI_REFRESH_INTERVAL = 100  # Will be optimized by adaptive config
+        AUTO_REFRESH_INTERVAL = 30  # Will be optimized by adaptive config
+        WORKER_CHECK_INTERVAL = 50  # Will be optimized by adaptive config
+        TABLE_UPDATE_BATCH_SIZE = 50  # Will be optimized by adaptive config
+        CACHE_TTL_SECONDS = 30  # Will be optimized by adaptive config
+        MAX_CONCURRENT_WORKERS = 4  # Will be optimized by adaptive config
+        
+        # New adaptive performance settings
+        MEMORY_CLEANUP_THRESHOLD = 0.8  # Trigger cleanup at 80% usage
+        ADAPTIVE_SCALING_ENABLED = True
+        PERFORMANCE_MONITORING_INTERVAL = 5000  # 5 seconds
+        LOAD_BALANCING_ENABLED = True
         
     # UI Configuration
     class UI:
@@ -50,6 +56,11 @@ class AppConstants:
         MIN_BATCH_DELAY = 100  # ms
         MAX_BATCH_DELAY = 5000  # ms
         
+        # Adaptive limits based on system performance
+        DYNAMIC_BATCH_SIZING = True
+        MAX_MEMORY_USAGE_MB = 1024  # 1GB limit for instance operations
+        CONNECTION_POOL_SIZE = 10  # Maximum concurrent connections
+        
     # File and Path Settings
     class Paths:
         ASSETS_DIR = "assets"
@@ -68,7 +79,7 @@ class AppConstants:
         
     # Logging Configuration
     class Logging:
-        MAX_LOG_ENTRIES = 5000
+        MAX_LOG_ENTRIES = 5000  # Will be optimized by adaptive config
         LOG_CLEANUP_THRESHOLD = 20  # percent
         AUTO_CLEANUP_ENABLED = True
         DEFAULT_LOG_LEVEL = "INFO"
@@ -76,6 +87,11 @@ class AppConstants:
         # Export settings
         EXPORT_INCLUDE_METADATA = True
         EXPORT_AUTO_TIMESTAMP = True
+        
+        # Performance optimizations
+        BATCH_LOG_WRITES = True
+        LOG_COMPRESSION_ENABLED = True
+        ASYNC_LOG_PROCESSING = True
         
     # Theme và Colors
     class Theme:

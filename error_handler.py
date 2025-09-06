@@ -4,6 +4,7 @@ import traceback
 import sys
 import os
 import logging
+from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from typing import Optional, Any, Dict, Callable
 from PyQt6.QtWidgets import QMessageBox, QApplication, QWidget
@@ -26,12 +27,19 @@ class ErrorHandler(QObject):
         """Setup structured logging"""
         self.logger = logging.getLogger('MumuManager')
         if not self.logger.handlers:
-            handler = logging.StreamHandler()
             formatter = logging.Formatter(
                 '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
             )
-            handler.setFormatter(formatter)
-            self.logger.addHandler(handler)
+            stream_handler = logging.StreamHandler()
+            stream_handler.setFormatter(formatter)
+
+            file_handler = RotatingFileHandler(
+                self.log_file, maxBytes=5 * 1024 * 1024, backupCount=3, encoding='utf-8'
+            )
+            file_handler.setFormatter(formatter)
+
+            self.logger.addHandler(stream_handler)
+            self.logger.addHandler(file_handler)
             self.logger.setLevel(logging.INFO)
             
     def set_parent_widget(self, widget: QWidget):
@@ -148,8 +156,6 @@ class ErrorHandler(QObject):
         """Enhanced warning logging với signals"""
         try:
             self.logger.warning(f"{component}: {message}")
-            with open(self.log_file, 'a', encoding='utf-8') as f:
-                f.write(f"[WARNING] {datetime.now().isoformat()} - {component}: {message}\n")
             self.warning_occurred.emit(component, message)
         except Exception as e:
             print(f"[WARNING] {component}: {message}")
@@ -159,8 +165,6 @@ class ErrorHandler(QObject):
         """Enhanced info logging"""
         try:
             self.logger.info(f"{component}: {message}")
-            with open(self.log_file, 'a', encoding='utf-8') as f:
-                f.write(f"[INFO] {datetime.now().isoformat()} - {component}: {message}\n")
         except Exception as e:
             print(f"[INFO] {component}: {message}")
             self.logger.error(f"Failed to log info: {e}")

@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import QTableWidgetItem, QWidget
 import psutil
 import time
 import threading
+from workers import GenericWorker, restart_instances_task
 
 
 # Import advanced memory management
@@ -357,6 +358,7 @@ class EnhancedMonokaiDashboard(QWidget):
     start_instance_requested = pyqtSignal(int)
     stop_instance_requested = pyqtSignal(int)
     restart_instance_requested = pyqtSignal(int)
+    restart_instances_finished = pyqtSignal(list)
     cleanup_requested = pyqtSignal(list)
     
     # New enhanced signals
@@ -395,6 +397,7 @@ class EnhancedMonokaiDashboard(QWidget):
         # Data management
         self.instances_data = []
         self.backend = None
+        self.restart_worker = None
         
         # Enhanced components initialization
         self.smart_cache = None
@@ -423,6 +426,9 @@ class EnhancedMonokaiDashboard(QWidget):
         
         # Create standard model/proxy for compatibility
         self.init_models()
+
+        # Connect internal signals
+        self.restart_instances_finished.connect(self._on_restart_instances_finished)
         
         # Setup UI
         self.setup_ui()
@@ -1112,31 +1118,29 @@ class EnhancedMonokaiDashboard(QWidget):
             print(f"🔄 DEBUG: Emitting single restart signal for instance {instance_id}")
             self.restart_instance_requested.emit(instance_id)
         elif len(ids) > 1:
-            # Multiple instances - handle them together
-            print(f"🔄 DEBUG: Restarting multiple instances: {ids}")
+            # Multiple instances - run in background worker
+            print(f"🔄 DEBUG: Restarting multiple instances asynchronously: {ids}")
             if self.backend:
-                # For restart, we need to stop first, then start
-                stop_success, stop_message = self.backend.control_instance(ids, 'shutdown')
-                print(f"🔄 DEBUG: Stop phase result: success={stop_success}, message='{stop_message}'")
-                
-                if stop_success:
-                    # Small delay before starting
-                    import time
-                    time.sleep(1)
-                    
-                    start_success, start_message = self.backend.control_instance(ids, 'launch')
-                    print(f"🔄 DEBUG: Start phase result: success={start_success}, message='{start_message}'")
-                    
-                    if start_success:
-                        print(f"✅ Multiple instances {ids} restarted successfully")
-                    else:
-                        print(f"❌ Failed to start multiple instances {ids} during restart: {start_message}")
-                else:
-                    print(f"❌ Failed to stop multiple instances {ids} during restart: {stop_message}")
+                params = {'indices': ids}
+                self.restart_worker = GenericWorker(restart_instances_task, self.backend, params)
+                self.restart_worker.finished.connect(
+                    lambda msg, ids=ids: self._on_restart_worker_finished(msg, ids)
+                )
+                self.restart_worker.start()
             else:
                 print(f"❌ Backend not available for multiple instances {ids}")
         else:
             print("⚠️ No instances selected")
+
+    def _on_restart_worker_finished(self, msg: str, ids: List[int]):
+        """Handle completion of the background restart worker."""
+        print(f"🔄 DEBUG: Restart worker finished for {ids}: {msg}")
+        self.restart_instances_finished.emit(ids)
+
+    def _on_restart_instances_finished(self, ids: List[int]):
+        """React to restart completion by refreshing UI."""
+        print(f"✅ Restart completed for instances: {ids}")
+        self.refresh_requested.emit()
 
     def handle_delete_instance(self):
         """Handle delete instance button"""

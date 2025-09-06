@@ -7,10 +7,159 @@ import time
 import json
 import hashlib
 import threading
+import os
 from typing import Any, Optional, Dict, Tuple, List
 from dataclasses import dataclass
 from enum import Enum
+from collections import defaultdict
 from PyQt6.QtCore import QObject, pyqtSignal
+
+
+class SmartCache(QObject):
+    """Intelligent caching system with TTL, LRU eviction, and persistence"""
+
+    cache_hit = pyqtSignal(str)
+    cache_miss = pyqtSignal(str)
+    cache_cleared = pyqtSignal()
+
+    def __init__(self, max_size: int = 1000, persistent: bool = True):
+        super().__init__()
+        self.cache: Dict[str, Any] = {}
+        self.timestamps: Dict[str, float] = {}
+        self.access_count: Dict[str, int] = defaultdict(int)
+        self.access_order: List[str] = []
+        self.max_size = max_size
+        self.persistent = persistent
+        self.cache_file = os.path.expanduser("~/.mumu_cache.json")
+
+        self.ttl_map = {
+            'instance_static': 900,    # 15 minutes - static info like name, path
+            'instance_dynamic': 120,   # 2 minutes - dynamic info like status
+            'instance_status': 30,     # 30 seconds - real-time status
+            'settings': 1800,          # 30 minutes - app settings
+            'presets': 900,            # 15 minutes - automation presets
+            'default': 300             # 5 minutes - default TTL
+        }
+
+        if self.persistent:
+            self.load_cache()
+
+    def load_cache(self):
+        """Load cache from disk to eliminate cold start cache misses"""
+        try:
+            if os.path.exists(self.cache_file):
+                with open(self.cache_file, 'r', encoding='utf-8') as f:
+                    cache_data = json.load(f)
+                    self.cache = cache_data.get('cache', {})
+                    self.timestamps = cache_data.get('timestamps', {})
+                    for key in list(self.timestamps.keys()):
+                        self.timestamps[key] = float(self.timestamps[key])
+                    current_time = time.time()
+                    expired_keys = [
+                        key for key in self.timestamps
+                        if current_time - self.timestamps[key] > self.ttl_map.get('instance_dynamic', 300)
+                    ]
+                    for key in expired_keys:
+                        self.cache.pop(key, None)
+                        self.timestamps.pop(key, None)
+        except Exception as e:
+            print(f"Cache load error (non-critical): {e}")
+
+    def save_cache(self):
+        """Save cache to disk for persistence across app restarts"""
+        try:
+            if self.persistent:
+                cache_data = {
+                    'cache': self.cache,
+                    'timestamps': {k: str(v) for k, v in self.timestamps.items()}
+                }
+                with open(self.cache_file, 'w', encoding='utf-8') as f:
+                    json.dump(cache_data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Cache save error (non-critical): {e}")
+
+    def get(self, key: str, cache_type: str = 'default') -> Optional[Any]:
+        """Get cached value if valid"""
+        if not self.is_valid(key, cache_type):
+            self.cache_miss.emit(key)
+            return None
+
+        self.access_count[key] += 1
+        if key in self.access_order:
+            self.access_order.remove(key)
+        self.access_order.append(key)
+
+        self.cache_hit.emit(key)
+        return self.cache.get(key)
+
+    def set(self, key: str, value: Any, cache_type: str = 'default'):
+        """Set cached value with timestamp, LRU tracking, and auto-persistence"""
+        if len(self.cache) >= self.max_size:
+            self._evict_lru()
+
+        self.cache[key] = value
+        self.timestamps[key] = time.time()
+        self.access_count[key] = 1
+
+        if key in self.access_order:
+            self.access_order.remove(key)
+        self.access_order.append(key)
+
+        self.cache[f"{key}_type"] = cache_type
+
+        if self.persistent:
+            self.save_cache()
+
+    def is_valid(self, key: str, cache_type: str) -> bool:
+        """Check if cached value is still valid"""
+        if key not in self.cache or key not in self.timestamps:
+            return False
+
+        stored_type = self.cache.get(f"{key}_type", cache_type)
+        ttl = self.ttl_map.get(stored_type, self.ttl_map['default'])
+
+        elapsed = time.time() - self.timestamps[key]
+        return elapsed < ttl
+
+    def invalidate(self, pattern: str = None):
+        """Invalidate cache entries"""
+        if pattern:
+            keys_to_remove = [k for k in self.cache.keys() if pattern in k and not k.endswith('_type')]
+            for key in keys_to_remove:
+                self._remove_key(key)
+        else:
+            self.cache.clear()
+            self.timestamps.clear()
+            self.access_count.clear()
+            self.access_order.clear()
+            self.cache_cleared.emit()
+
+    def _evict_lru(self):
+        """Evict least recently used item"""
+        if self.access_order:
+            lru_key = self.access_order[0]
+            self._remove_key(lru_key)
+
+    def _remove_key(self, key: str):
+        """Remove key and its metadata"""
+        self.cache.pop(key, None)
+        self.cache.pop(f"{key}_type", None)
+        self.timestamps.pop(key, None)
+        self.access_count.pop(key, None)
+        if key in self.access_order:
+            self.access_order.remove(key)
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get cache statistics"""
+        total_accesses = sum(self.access_count.values())
+        return {
+            'size': len([k for k in self.cache.keys() if not k.endswith('_type')]),
+            'max_size': self.max_size,
+            'total_accesses': total_accesses,
+            'hit_rate': len(self.access_count) / max(total_accesses, 1),
+            'keys': list(self.cache.keys())
+        }
+
 
 class CacheStrategy(Enum):
     """Chiến lược cache khác nhau"""
@@ -37,7 +186,7 @@ class CacheEntry:
     def age(self) -> float:
         return time.time() - self.timestamp
 
-class SmartCache(QObject):
+class AdvancedSmartCache(QObject):
     """Smart caching system cho ADB commands với signals và error handling"""
     
     # Signals for monitoring
@@ -213,7 +362,7 @@ class SmartCache(QObject):
             'strategy': self.strategy.value
         }
 
-class PredictiveCache(SmartCache):
+class PredictiveCache(AdvancedSmartCache):
     """🔮 Advanced cache với predictive capabilities"""
 
     def __init__(self, max_size_mb: int = 50, strategy: CacheStrategy = CacheStrategy.SMART, persistent: bool = False):
@@ -508,7 +657,7 @@ class TemporalAnalyzer:
         return (hour_prob + day_prob) / 2
 
 # Global cache instance with persistence for better startup performance
-global_smart_cache = SmartCache(max_size_mb=100, strategy=CacheStrategy.SMART, persistent=True)
+global_smart_cache = AdvancedSmartCache(max_size_mb=100, strategy=CacheStrategy.SMART, persistent=True)
 
 # Global predictive cache instance
 global_predictive_cache = PredictiveCache(max_size_mb=100, strategy=CacheStrategy.SMART, persistent=True)

@@ -1,7 +1,7 @@
 # worker_manager.py - Advanced worker thread management system
 
 from typing import Dict, Optional, List, Callable, Any
-from PyQt6.QtCore import QObject, QThread, pyqtSignal, QTimer
+from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal, QTimer
 import uuid
 import time
 from enum import Enum
@@ -37,16 +37,17 @@ class WorkerInfo:
     error_message: Optional[str] = None
     result: Any = None
 
-class ManagedWorker(QObject):
-    """Enhanced worker với lifecycle management"""
-    
+class WorkerRunnable(QObject, QRunnable):
+    """Runnable worker executed in a thread pool"""
+
     finished = pyqtSignal(str, object)  # worker_id, result
     error = pyqtSignal(str, str)  # worker_id, error_message
     progress = pyqtSignal(str, int)  # worker_id, percentage
     status_changed = pyqtSignal(str, str)  # worker_id, status
-    
+
     def __init__(self, worker_id: str, name: str, task_func: Callable, *args, **kwargs):
-        super().__init__()
+        QObject.__init__(self)
+        QRunnable.__init__(self)
         self.worker_id = worker_id
         self.name = name
         self.task_func = task_func
@@ -54,52 +55,33 @@ class ManagedWorker(QObject):
         self.kwargs = kwargs
         self.status = WorkerStatus.IDLE
         self._cancelled = False
-        self._thread: Optional[QThread] = None
-        
-    def start(self):
-        """Start the worker in a separate thread"""
-        if self.status != WorkerStatus.IDLE:
-            return False
-            
-        self._thread = QThread()
-        self.moveToThread(self._thread)
-        
-        self._thread.started.connect(self._run)
-        self._thread.finished.connect(self._thread.deleteLater)
-        
-        self.status = WorkerStatus.RUNNING
-        self.status_changed.emit(self.worker_id, self.status.value)
-        
-        self._thread.start()
-        return True
-    
+
     def cancel(self):
         """Cancel the worker"""
         self._cancelled = True
         self.status = WorkerStatus.CANCELLED
         self.status_changed.emit(self.worker_id, self.status.value)
-        
-        if self._thread and self._thread.isRunning():
-            self._thread.quit()
-            self._thread.wait(5000)  # Wait up to 5 seconds
-    
+
     def is_cancelled(self) -> bool:
         """Check if worker was cancelled"""
         return self._cancelled
-    
-    def _run(self):
+
+    def run(self):
         """Execute the worker task"""
         try:
             if self._cancelled:
                 return
-                
+
+            self.status = WorkerStatus.RUNNING
+            self.status_changed.emit(self.worker_id, self.status.value)
+
             result = self.task_func(*self.args, **self.kwargs)
-            
+
             if not self._cancelled:
                 self.status = WorkerStatus.FINISHED
                 self.status_changed.emit(self.worker_id, self.status.value)
                 self.finished.emit(self.worker_id, result)
-                
+
         except Exception as e:
             if not self._cancelled:
                 error_msg = str(e)
@@ -107,9 +89,6 @@ class ManagedWorker(QObject):
                 self.status_changed.emit(self.worker_id, self.status.value)
                 self.error.emit(self.worker_id, error_msg)
                 global_error_handler.handle_worker_error(self.name, e)
-        finally:
-            if self._thread:
-                self._thread.quit()
 
 class WorkerManager(QObject):
     """Advanced worker pool manager với resource management"""
@@ -124,7 +103,9 @@ class WorkerManager(QObject):
         self.max_workers = max_workers or get_config("performance.worker_pool_size", 
                                                     AppConstants.Performance.MAX_CONCURRENT_WORKERS)
         
-        self._workers: Dict[str, ManagedWorker] = {}
+        self._thread_pool = QThreadPool.globalInstance()
+        self._thread_pool.setMaxThreadCount(int(self.max_workers))
+        self._workers: Dict[str, WorkerRunnable] = {}
         self._worker_info: Dict[str, WorkerInfo] = {}
         self._cleanup_timer = None  # Lazy initialization
         self._cleanup_started = False
@@ -177,13 +158,13 @@ class WorkerManager(QObject):
         
         # Create worker
         worker_id = str(uuid.uuid4())
-        worker = ManagedWorker(worker_id, name, task_func, *args, **kwargs)
-        
+        worker = WorkerRunnable(worker_id, name, task_func, *args, **kwargs)
+
         # Connect signals
         worker.finished.connect(self._on_worker_finished)
         worker.error.connect(self._on_worker_error)
         worker.status_changed.connect(self._on_worker_status_changed)
-        
+
         # Store worker and info
         self._workers[worker_id] = worker
         self._worker_info[worker_id] = WorkerInfo(
@@ -192,20 +173,14 @@ class WorkerManager(QObject):
             status=WorkerStatus.IDLE,
             created_at=time.time()
         )
-        
-        # Start worker
-        if worker.start():
-            self._worker_info[worker_id].started_at = time.time()
-            self._worker_info[worker_id].status = WorkerStatus.RUNNING
-            self.worker_started.emit(worker_id, name)
-            global_error_handler.log_info(f"Started worker '{name}' ({worker_id})", "WorkerManager")
-            return worker_id
-        else:
-            # Cleanup failed worker
-            del self._workers[worker_id]
-            del self._worker_info[worker_id]
-            global_error_handler.log_warning(f"Failed to start worker '{name}'", "WorkerManager")
-            return None
+
+        # Start worker in thread pool
+        self._thread_pool.start(worker, priority)
+        self._worker_info[worker_id].started_at = time.time()
+        self._worker_info[worker_id].status = WorkerStatus.RUNNING
+        self.worker_started.emit(worker_id, name)
+        global_error_handler.log_info(f"Started worker '{name}' ({worker_id})", "WorkerManager")
+        return worker_id
     
     def cancel_worker(self, worker_id: str) -> bool:
         """Cancel a specific worker"""
@@ -214,6 +189,10 @@ class WorkerManager(QObject):
             
         worker = self._workers[worker_id]
         worker.cancel()
+        try:
+            self._thread_pool.cancel(worker)
+        except AttributeError:
+            pass  # cancel may not be available in some Qt versions
         
         if worker_id in self._worker_info:
             self._worker_info[worker_id].status = WorkerStatus.CANCELLED
@@ -316,9 +295,10 @@ class WorkerManager(QObject):
         self.cancel_all_workers()
         
         # Wait for workers to finish
-        for worker in self._workers.values():
-            if worker._thread and worker._thread.isRunning():
-                worker._thread.wait(2000)
+        try:
+            self._thread_pool.waitForDone(2000)
+        except Exception:
+            pass
         
         self._workers.clear()
         self._worker_info.clear()

@@ -119,7 +119,7 @@ from ui import (
     ModernButton, ModernCard, ModernProgressBar, ModernTable, 
     DesignTokens
 )
-from ui.performance import SmartCache as UISmartCache, AsyncTaskManager
+from ui.performance import AsyncTaskManager
 
 # =====================================================================
 # UI MANAGERS - REFACTORED COMPONENTS

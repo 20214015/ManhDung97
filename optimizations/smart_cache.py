@@ -54,6 +54,9 @@ class SmartCache(QObject):
         self.hit_count = 0
         self.miss_count = 0
         self.persistent = persistent
+
+        # Re-entrant lock for thread-safe cache access
+        self._lock = threading.RLock()
         
         # TTL defaults for different command types
         self.ttl_map = {
@@ -79,87 +82,91 @@ class SmartCache(QObject):
     
     def _evict_if_needed(self, required_size: int):
         """LRU eviction khi cache đầy với signal emission"""
-        current_size = sum(entry.size_bytes for entry in self.cache.values())
-        
-        if current_size + required_size <= self.max_size_bytes:
-            return
-            
-        # Sort by access frequency and age (LRU + LFU hybrid)
-        entries_by_priority = sorted(
-            self.cache.items(),
-            key=lambda x: (x[1].access_count, -x[1].age)
-        )
-        
-        for key, entry in entries_by_priority:
-            del self.cache[key]
-            current_size -= entry.size_bytes
-            self.cache_evicted.emit(key)
+        with self._lock:
+            current_size = sum(entry.size_bytes for entry in self.cache.values())
+
             if current_size + required_size <= self.max_size_bytes:
-                break
+                return
+
+            # Sort by access frequency and age (LRU + LFU hybrid)
+            entries_by_priority = sorted(
+                self.cache.items(),
+                key=lambda x: (x[1].access_count, -x[1].age)
+            )
+
+            for key, entry in entries_by_priority:
+                del self.cache[key]
+                current_size -= entry.size_bytes
+                self.cache_evicted.emit(key)
+                if current_size + required_size <= self.max_size_bytes:
+                    break
     
     def get(self, command: str, params: Dict = None, command_type: str = 'default') -> Optional[Any]:
         """Get from cache với enhanced monitoring"""
         cache_key = self._generate_key(command, params)
-        
-        if cache_key not in self.cache:
-            self.miss_count += 1
-            self.cache_miss.emit(cache_key)
-            return None
-            
-        entry = self.cache[cache_key]
-        
-        # Check expiration
-        if entry.is_expired:
-            del self.cache[cache_key]
-            self.miss_count += 1
-            self.cache_miss.emit(cache_key)
-            return None
-            
-        # Update access stats
-        entry.access_count += 1
-        self.hit_count += 1
-        self.cache_hit.emit(cache_key)
-        
-        return entry.data
+
+        with self._lock:
+            if cache_key not in self.cache:
+                self.miss_count += 1
+                self.cache_miss.emit(cache_key)
+                return None
+
+            entry = self.cache[cache_key]
+
+            # Check expiration
+            if entry.is_expired:
+                del self.cache[cache_key]
+                self.miss_count += 1
+                self.cache_miss.emit(cache_key)
+                return None
+
+            # Update access stats
+            entry.access_count += 1
+            self.hit_count += 1
+            self.cache_hit.emit(cache_key)
+
+            return entry.data
     
     def set(self, command: str, data: Any, command_type: str = 'default', params: Dict = None):
         """Set cache entry"""
         cache_key = self._generate_key(command, params)
         data_size = self._estimate_size(data)
-        
-        # Evict if needed
-        self._evict_if_needed(data_size)
-        
-        # Determine TTL
-        ttl = self.ttl_map.get(command_type, 10.0)
-        
-        # Smart TTL adjustment based on command type and data size
-        if self.strategy == CacheStrategy.SMART:
-            if data_size > 1024 * 100:  # Large data gets longer TTL
-                ttl *= 2
-            if command_type in ['system_info', 'app_list']:
-                ttl *= 3  # Stable data gets longer TTL
-        
-        entry = CacheEntry(
-            data=data,
-            timestamp=time.time(),
-            access_count=1,
-            ttl=ttl,
-            size_bytes=data_size,
-            cache_key=cache_key
-        )
-        
-        self.cache[cache_key] = entry
+
+        with self._lock:
+            # Evict if needed
+            self._evict_if_needed(data_size)
+
+            # Determine TTL
+            ttl = self.ttl_map.get(command_type, 10.0)
+
+            # Smart TTL adjustment based on command type and data size
+            if self.strategy == CacheStrategy.SMART:
+                if data_size > 1024 * 100:  # Large data gets longer TTL
+                    ttl *= 2
+                if command_type in ['system_info', 'app_list']:
+                    ttl *= 3  # Stable data gets longer TTL
+
+            entry = CacheEntry(
+                data=data,
+                timestamp=time.time(),
+                access_count=1,
+                ttl=ttl,
+                size_bytes=data_size,
+                cache_key=cache_key
+            )
+
+            self.cache[cache_key] = entry
     
     def invalidate_pattern(self, pattern: str):
         """Invalidate cache entries matching pattern với improved performance"""
-        to_remove = [
-            key for key in self.cache.keys() 
-            if pattern in key
-        ]
-        for key in to_remove:
-            del self.cache[key]
-            self.cache_evicted.emit(key)
+        with self._lock:
+            to_remove = [
+                key for key in list(self.cache.keys())
+                if pattern in key
+            ]
+            for key in to_remove:
+                del self.cache[key]
+                self.cache_evicted.emit(key)
     
     def clear(self):
         """Clear all cache entries"""
@@ -170,14 +177,15 @@ class SmartCache(QObject):
     
     def cleanup_expired(self):
         """Remove expired entries to free memory"""
-        expired_keys = [
-            key for key, entry in self.cache.items()
-            if entry.is_expired
-        ]
-        for key in expired_keys:
-            del self.cache[key]
-            self.cache_evicted.emit(key)
-        return len(expired_keys)
+        with self._lock:
+            expired_keys = [
+                key for key, entry in list(self.cache.items())
+                if entry.is_expired
+            ]
+            for key in expired_keys:
+                del self.cache[key]
+                self.cache_evicted.emit(key)
+            return len(expired_keys)
     
     def get_stats(self) -> Dict:
         """Get comprehensive cache statistics"""
@@ -345,6 +353,7 @@ class PrefetchEngine:
         self.prefetch_queue = []
         self.prefetch_workers = {}
         self.max_concurrent_prefetches = 3
+        self._lock = threading.Lock()
 
     def predict_related_commands(self, command: str, params: Dict, command_type: str) -> List[Dict]:
         """Predict related commands to prefetch"""
@@ -366,26 +375,27 @@ class PrefetchEngine:
 
     def schedule_prefetch(self, candidate: Dict):
         """Schedule prefetch của predicted command"""
-        if len(self.prefetch_workers) >= self.max_concurrent_prefetches:
-            return  # Too many active prefetches
+        with self._lock:
+            if len(self.prefetch_workers) >= self.max_concurrent_prefetches:
+                return  # Too many active prefetches
 
-        # Add to queue for background processing
-        self.prefetch_queue.append(candidate)
+            # Add to queue for background processing
+            self.prefetch_queue.append(candidate)
 
-        # Process queue
+        # Process queue outside the lock
         self._process_prefetch_queue()
 
     def _process_prefetch_queue(self):
         """Process prefetch queue trong background"""
-        while self.prefetch_queue and len(self.prefetch_workers) < self.max_concurrent_prefetches:
-            candidate = self.prefetch_queue.pop(0)
-
-            # Start prefetch worker
-            worker_id = f"prefetch_{time.time()}"
-            worker = PrefetchWorker(worker_id, candidate)
+        while True:
+            with self._lock:
+                if not self.prefetch_queue or len(self.prefetch_workers) >= self.max_concurrent_prefetches:
+                    break
+                candidate = self.prefetch_queue.pop(0)
+                worker_id = f"prefetch_{time.time()}"
+                worker = PrefetchWorker(worker_id, candidate)
+                self.prefetch_workers[worker_id] = worker
             worker.start()
-
-            self.prefetch_workers[worker_id] = worker
 
 class PrefetchWorker(threading.Thread):
     """Worker để execute prefetch tasks"""

@@ -8,6 +8,7 @@ Implements CommandBus pattern for timeout/retry/logging control.
 
 import os
 import time
+import heapq
 from typing import List, Tuple, Any, Dict, Optional, Callable
 from dataclasses import dataclass
 from enum import Enum
@@ -165,7 +166,8 @@ class CommandBus(QObject):
         super().__init__(parent)
         self.max_concurrent = max_concurrent
         self.active_commands: Dict[str, QProcessCommand] = {}
-        self.command_queue: List[Tuple[CommandPriority, str, Callable[[], None]]] = []
+        # priority queue implemented as a heap
+        self.command_queue: List[Tuple[int, str, Callable[[], None]]] = []
         self.command_history: List[Tuple[str, CommandResult]] = []
 
     def execute_command(self, executable_path: str, args: List[str],
@@ -184,9 +186,8 @@ class CommandBus(QObject):
             self.command_started.emit(executable_path, args)
             command.execute()
 
-        # Add to priority queue
-        self.command_queue.append((priority, command_id, execute_func))
-        self.command_queue.sort(key=lambda x: x[0].value)  # Sort by priority
+        # Add to priority queue using heap for efficiency
+        heapq.heappush(self.command_queue, (priority.value, command_id, execute_func))
 
         self._process_queue()
         self.queue_updated.emit(len(self.command_queue))
@@ -198,7 +199,7 @@ class CommandBus(QObject):
         if (len(self.active_commands) < self.max_concurrent and
             self.command_queue):
 
-            priority, command_id, execute_func = self.command_queue.pop(0)
+            priority, command_id, execute_func = heapq.heappop(self.command_queue)
             execute_func()
 
     def _on_command_finished(self, command_id: str, result: CommandResult,

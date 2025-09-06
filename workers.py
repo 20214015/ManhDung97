@@ -154,6 +154,33 @@ def apply_settings_task(worker: GenericWorker, manager: MumuManager, params: Dic
     worker.progress.emit(100)
     return {'success': indices}
 
+
+def restart_instances_task(worker: GenericWorker, manager: MumuManager, params: Dict[str, Any]):
+    """Restart multiple instances without blocking the UI."""
+    indices: List[int] = params.get('indices', [])
+    worker.started.emit(f"🔄 Restarting instances: {indices}")
+
+    results: Dict[str, Any] = {'indices': indices}
+
+    stop_success, stop_message = manager.control_instance(indices, 'shutdown')
+    worker.log.emit(
+        f"Stop phase result: success={stop_success}, message='{stop_message}'"
+    )
+    results['stop_success'] = stop_success
+    results['stop_message'] = stop_message
+
+    if stop_success:
+        # Delay using thread-safe sleep
+        worker.msleep(1000)
+        start_success, start_message = manager.control_instance(indices, 'launch')
+        worker.log.emit(
+            f"Start phase result: success={start_success}, message='{start_message}'"
+        )
+        results['start_success'] = start_success
+        results['start_message'] = start_message
+
+    return results
+
 def find_disk_files_task(worker: GenericWorker, manager: MumuManager, params: dict):
     """
     Tìm kiếm các file như ota.vdi hoặc customer_config.json trong thư mục vms.
